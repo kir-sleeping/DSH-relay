@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay 接入示例 · 收件箱小报</title>
+<!--
+  ============================================================================
+  Relay 接入示例（单文件，无构建、无后端）
+  ============================================================================
+
+  这个页面自己没有 AI。所有智能来自本机 Relay 插件暴露的 HTTP 接口（三处都用到它）：
+     · 起草回复 —— 用户主动请求，流式
+     · 每日小报 —— 应用后台请求，结构化输出 + 校验重试
+     · 随手问   —— 最小形态的流式聊天
+
+      http://127.0.0.1:3080/x/relay
+
+  ── 它演示两件事 ───────────────────────────────────────────────────────────
+
+  1) 用户主动请求：用户点「起草回复」，页面把邮件数据交出去，结果流式写回来。
+     trigger = "user"
+
+  2) 应用后台请求：页面自己发起的批量任务（真实产品里由定时器触发），
+     要求 agent 输出**可解析的 JSON**，解析失败自动重试一次。
+     trigger = "app"
+
+  这两种的差别不在"谁更礼貌"，而在协议字段：
+     - trigger 表示谁发起的。缺省 "app"（更保守）。
+     - approved 由 Relay 填，表示这次调用有没有被允许发生。
+
+  ★ 关键不变式：trigger="app" 的消息永远不会被标成"用户说的话"，
+    哪怕用户在确认框里点了「允许」。放行 ≠ 署名。
+
+  ── 后端契约（只列本页用到的） ──────────────────────────────────────────────
+
+  POST /fingerprint        {source}
+    首次接入。会在主机上弹出系统确认框，用户点「允许」才返回凭证。
+    阻塞最长 60 秒，所以这个请求的 fetch 不能设置太短的超时。
+
+  POST /submit             {content, source, fingerprint, session, trigger, wait, timeout}
+    wait=true   → 200 {type:"final", content} | 202 {id,status:"pending"} | 410
+    stream=true → text/event-stream，事件见下面 streamAsk()
+    失败        → 4xx/5xx + {code, message}
+
+  GET  /result/{id}        202 未完成 | 200 已完成 | 404 不存在 | 410 作废
+  GET  /sources            登记列表（无凭证），用来读自己的级别
+
+  ── 错误码怎么处理（注释在这里，页面不展示） ───────────────────────────────
+
+  400 ERR_TRIGGER / ERR_CONTENT ...  请求写错了，改代码，不要重试
+  401 ERR_INPUT_FINGERPRINT          凭证缺失或失效 → 清本地凭证 → 重新申请 → 重试一次
+  403 ERR_ACCESS_DENIED              来源在禁止名单 → 不重试，提示去设置里解除
+  403 ERR_AUTH_DENIED                用户当场拒绝 → 不重试，尊重拒绝
+  409 ERR_SESSION_OUTSIDE_WORKSPACE  会话不在 Relay 工作区 → 用 default session "main"
+  410 ERR_QUEUE_EXPIRED              排队超时作废 → 可以重试一次（这是"迟到了"，不是"错了"）
+  503 ERR_AUTH_UNAVAILABLE           主机没有可用桌面 → 不重试，人去主机操作
+  504 ERR_AUTH_TIMEOUT               确认超时 → 可以重试
+  200 + type:"error"                 任务执行失败 → 读 code/message，通常重试无用
+  网络错误                            服务没开 → 提示，不重试
+
+  原则：**主动请求的错误要让人看见并能重试；后台请求的错误要安静，但代码里留痕。**
+
+  ── 怎么跑 ────────────────────────────────────────────────────────────────
+
+  直接双击打开，或 python3 -m http.server 8000 后访问。
+  从 file:// 打开时 Origin 是 null，Relay 允许。
+
+  演示前建议：先点一次任意按钮完成授权，再去「设置 → 应用权限」把
+  inbox-demo 的级别从 1 调到 3。否则每条消息都会弹一次系统确认框——
+  包括后台请求，因为它是 trigger="app"，协议上就不该被当成用户的话。
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --card: #f9fafb;
+    --accent: #2563eb;
+    --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --line: #262b35;
+      --card: #171a21;
+      --accent: #60a5fa;
+      --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--fg);
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .status { color: var(--muted); font-size: 12px; }
+  .status b { color: var(--fg); font-weight: 600; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .item {
+    padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .item:last-child { border-bottom: 0; }
+  .item:hover { background: var(--card); }
+  .item.active { background: var(--card); border-left: 3px solid var(--accent); padding-left: 9px; }
+  .item-main { min-width: 0; flex: 1; }
+  .item-from { font-size: 12px; color: var(--muted); }
+  .item-subject { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip {
+    font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .chip.hot { color: var(--warn); border-color: var(--warn); }
+  .reader { border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-height: 320px; }
+  .reader h2 { font-size: 15px; margin: 0 0 4px; }
+  .reader .meta { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .reader .body { white-space: pre-wrap; margin-bottom: 16px; }
+  textarea {
+    width: 100%; min-height: 130px; padding: 10px 12px; resize: vertical;
+    font: inherit; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .digest { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .digest h2 { font-size: 15px; margin: 0 0 4px; }
+  .digest ol { margin: 12px 0 0; padding-left: 22px; }
+  .digest li { margin-bottom: 8px; }
+  .digest a { color: var(--accent); text-decoration: none; margin-left: 8px; font-size: 12px; }
+  .digest a:hover { text-decoration: underline; }
+  .dim { color: var(--muted); font-size: 12px; }
+  .error { color: var(--warn); font-size: 12px; margin-top: 8px; }
+  .chat { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .chat h2 { font-size: 15px; margin: 0 0 4px; }
+  .chat input {
+    flex: 1; min-width: 200px; padding: 8px 12px; font: inherit; color: var(--fg);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .chat .body { white-space: pre-wrap; min-height: 22px; }
+  pre.raw {
+    display: none; margin-top: 12px; padding: 10px; overflow: auto; max-height: 220px;
+    font-size: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>收件箱</h1>
+    <span class="status" id="status">未授权 · 会话 <b>main</b></span>
+    <span class="spacer"></span>
+    <button id="digestBtn">生成每日小报</button>
+  </header>
+
+  <div class="grid">
+    <div class="list" id="list"></div>
+    <div class="reader">
+      <h2 id="subject">—</h2>
+      <div class="meta" id="meta"></div>
+      <div class="body" id="body"></div>
+      <textarea id="draft" placeholder="回复草稿会出现在这里"></textarea>
+      <div class="row">
+        <button class="primary" id="draftBtn">起草回复</button>
+        <button id="refineBtn" disabled>再正式一点</button>
+      </div>
+      <div class="hint" id="draftHint"></div>
+      <div class="error" id="draftError"></div>
+    </div>
+  </div>
+
+  <div class="digest">
+    <h2>今日小报</h2>
+    <div class="dim" id="digestStatus">尚未生成。真实产品里这一步由每天的定时任务触发，这里用按钮模拟。</div>
+    <ol id="digestList"></ol>
+    <pre class="raw" id="digestRaw"></pre>
+  </div>
+
+  <div class="chat">
+    <h2>随手问</h2>
+    <div class="dim">这条走流式：回答边生成边显示，不用轮询。</div>
+    <div class="row">
+      <input id="chatInput" placeholder="问点什么…回车或点发送">
+      <button class="primary" id="chatBtn">发送</button>
+    </div>
+    <div class="body" id="chatOut"></div>
+    <div class="error" id="chatError"></div>
+  </div>
+</div>
+
+<script type="module">
+// ============================================================================
+// 1. 配置
+// ============================================================================
+const CONFIG = {
+  base: 'http://127.0.0.1:3080/x/relay',
+  source: 'inbox-demo',
+  session: 'main',
+  storageKey: 'relay.fingerprint.inbox-demo',
+  pollMs: 1500,
+  pollDeadlineMs: 120000,
+};
+
+// ============================================================================
+// 2. 传输层
+// ----------------------------------------------------------------------------
+// 统一出口。把"HTTP 状态码 + body"翻译成一个带 kind 的错误，上层按 kind 决定
+// 是重试、提示、还是静默。不要把状态码判断散落到各处。
+// ============================================================================
+class RelayError extends Error {
+  constructor(kind, status, body) {
+    super(`[${kind}] ${body?.code ?? status}: ${body?.message ?? ''}`);
+    this.kind = kind;
+    this.status = status;
+    this.body = body;
+  }
+}
+
+function classify(status, body) {
+  if (status === 401) return 'credential';
+  if (status === 403) return body?.code === 'ERR_ACCESS_DENIED' ? 'denied' : 'rejected';
+  if (status === 404) return 'missing';
+  if (status === 409) return 'conflict';
+  if (status === 410) return 'expired';
+  if (status === 503) return 'unavailable';
+  if (status === 504) return 'auth-timeout';
+  if (status >= 500) return 'server';
+  return 'request';
+}
+
+async function call(path, payload) {
+  let response;
+  try {
+    response = await fetch(CONFIG.base + path, {
+      method: payload === undefined ? 'GET' : 'POST',
+      headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    });
+  } catch {
+    // 连不上：服务没开、端口不对、被防火墙拦。重试没有意义，直接告诉用户。
+    throw new RelayError('network', 0, { code: 'ERR_NETWORK', message: '连不上 Relay 服务' });
+  }
+  const text = await response.text();
+  let body = {};
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { code: 'ERR_BAD_JSON', message: text.slice(0, 200) };
+  }
+  return { status: response.status, body };
+}
+
+// ============================================================================
+// 3. 授权
+// ----------------------------------------------------------------------------
+// 凭证存在 localStorage：丢了就会重新申请，而重新申请会再弹一次系统确认框。
+// 注意：申请接口会阻塞到用户点完（最长 60 秒），所以这里不能套用短超时。
+// ============================================================================
+async function enroll() {
+  const { status, body } = await call('/fingerprint', { source: CONFIG.source });
+  if (status !== 200) {
+    // ERR_SOURCE_EXISTS 说明这个来源接过入了但本地凭证丢了：只能让用户去
+    // 「设置 → 应用权限」重置凭证，页面无法自救。
+    throw new RelayError(classify(status, body), status, body);
+  }
+  localStorage.setItem(CONFIG.storageKey, body.fingerprint);
+  await refreshStatus();
+  return body.fingerprint;
+}
+
+async function fingerprint() {
+  const cached = localStorage.getItem(CONFIG.storageKey);
+  return cached || await enroll();
+}
+
+async function refreshStatus() {
+  const el = document.getElementById('status');
+  try {
+    const { body } = await call('/sources');
+    const mine = (body.sources ?? []).find((row) => row.source === CONFIG.source);
+    if (!mine) {
+      el.innerHTML = `未授权 · 会话 <b>${CONFIG.session}</b>`;
+      return;
+    }
+    const advice = mine.level < 3
+      ? '　·　级别 &lt;3：每次调用都会弹确认框，后台请求也不例外'
+      : '';
+    el.innerHTML = `已授权 · 级别 <b>${mine.level}</b> · 会话 <b>${CONFIG.session}</b>${advice}`;
+  } catch {
+    el.innerHTML = `连不上 Relay 服务 · 会话 <b>${CONFIG.session}</b>`;
+  }
+}
+
+// 凭证失效（401）时清掉本地值，下一次调用会自动重新申请。
+function dropCredential() {
+  localStorage.removeItem(CONFIG.storageKey);
+}
+
+// ============================================================================
+// 4. 两种请求
+// ----------------------------------------------------------------------------
+// ask() 走"提交 + 轮询"，适合后台请求：不打扰，拿完整结果。
+// streamAsk() 走 SSE，适合用户主动请求：边生成边显示，用户在看。
+// ============================================================================
+async function submit({ content, trigger, wait, stream, timeoutSec }) {
+  const print = await fingerprint();
+  const payload = {
+    content,
+    source: CONFIG.source,
+    fingerprint: print,
+    session: CONFIG.session,
+    trigger,                                   // "user" | "app"
+    timeout: timeoutSec,
+    ...(stream ? { stream: true } : { wait: true }),
+  };
+  return call('/submit', payload);
+}
+
+async function pollResult(id) {
+  const deadline = Date.now() + CONFIG.pollDeadlineMs;
+  while (Date.now() < deadline) {
+    const { status, body } = await call(`/result/${encodeURIComponent(id)}`);
+    if (status === 200) {
+      if (body.type === 'final') return body.content;
+      throw new RelayError('task', 200, body);
+    }
+    if (status === 410) throw new RelayError('expired', 410, body);
+    if (status !== 202) throw new RelayError(classify(status, body), status, body);
+    await new Promise((resolve) => setTimeout(resolve, CONFIG.pollMs));
+  }
+  throw new RelayError('timeout', 0, { code: 'ERR_POLL_TIMEOUT', message: '轮询超时' });
+}
+
+async function ask({ content, trigger, timeoutSec = 120, retryCredential = true }) {
+  let result;
+  try {
+    result = await submit({ content, trigger, wait: true, timeoutSec });
+  } catch (error) {
+    if (error.kind === 'credential' && retryCredential) {
+      // 凭证失效：清掉、重新申请（会弹一次确认框）、再试一次。只重试一次。
+      dropCredential();
+      return ask({ content, trigger, timeoutSec, retryCredential: false });
+    }
+    throw error;
+  }
+
+  const { status, body } = result;
+  if (status === 200) {
+    if (body.type === 'final') return body.content;
+    throw new RelayError('task', 200, body);
+  }
+  if (status === 202) return pollResult(body.id);
+  if (status === 410) throw new RelayError('expired', 410, body);
+
+  if (status === 401 && retryCredential) {
+    dropCredential();
+    return ask({ content, trigger, timeoutSec, retryCredential: false });
+  }
+  throw new RelayError(classify(status, body), status, body);
+}
+
+async function streamAsk({ content, trigger, timeoutSec = 120, onDelta, retryCredential = true }) {
+  const print = await fingerprint();
+  let response;
+  try {
+    response = await fetch(CONFIG.base + '/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content, source: CONFIG.source, fingerprint: print,
+        session: CONFIG.session, trigger, stream: true, timeout: timeoutSec,
+      }),
+    });
+  } catch {
+    throw new RelayError('network', 0, { code: 'ERR_NETWORK', message: '连不上 Relay 服务' });
+  }
+
+  // 准入失败时不会开流，仍然是普通 JSON —— 靠 Content-Type 区分。
+  const type = response.headers.get('content-type') ?? '';
+  if (!type.includes('text/event-stream')) {
+    const text = await response.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { body = {}; }
+    if (response.status === 401) {
+      // 凭证失效：清掉、重新申请、整条请求重来一次。只重试一次。
+      dropCredential();
+      if (retryCredential) {
+        return streamAsk({ content, trigger, timeoutSec, onDelta, retryCredential: false });
+      }
+      throw new RelayError('credential', 401, body);
+    }
+    throw new RelayError(classify(response.status, body), response.status, body);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let answer = '';
+  let event = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let cut;
+    while ((cut = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) {
+          event = line.slice(7).trim();
+        } else if (line.startsWith('data: ') && event) {
+          const data = JSON.parse(line.slice(6));
+          if (event === 'content') {
+            answer += data.text ?? '';
+            onDelta?.(data.text ?? '', answer);
+          } else if (event === 'error') {
+            throw new RelayError('task', 200, data);
+          } else if (event === 'end') {
+            if (data.status === 'completed') return data.content ?? answer;
+            throw new RelayError(data.status === 'timeout' ? 'timeout' : 'task', 200, {
+              code: `ERR_STREAM_${String(data.status).toUpperCase()}`,
+              message: `流式结束：${data.status}`,
+            });
+          }
+          event = null;
+        }
+      }
+    }
+  }
+  return answer;
+}
+
+// ============================================================================
+// 5. 每日小报：让 agent 输出可解析的结构
+// ----------------------------------------------------------------------------
+// 这是本例的重点：agent 的输出是自由文本，不是 API。必须在提示词里写死形状，
+// 回来之后严格校验，校验不过就带着原因重发一次。
+// ============================================================================
+const DIGEST_PROMPT_HEAD = `你是邮件助手。下面是过去一天收到的邮件，每封有 id、发件人、主题、时间、链接、正文。
+
+请生成一份小报：按重要性从高到低排序，每封给一句话总结（不超过 30 字）。
+
+只输出 JSON，不要任何解释，不要 Markdown 代码块。格式：
+{"digest":[{"id":"邮件id","importance":3,"summary":"一句话","url":"邮件的链接"}]}
+
+importance 是整数，越大越重要，条目必须按 importance 从大到小排列。
+id 和 url 必须原样取自输入，不要改写，不要新增。
+
+邮件数据：`;
+
+function repairPrompt(reason) {
+  return `上一次输出无法解析，原因：${reason}。
+只输出 JSON，不要解释，不要代码块。格式必须是：
+{"digest":[{"id":"…","importance":3,"summary":"…","url":"…"}]}`;
+}
+
+function extractJson(text) {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : text;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function validateDigest(parsed, emails) {
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.digest)) {
+    return { ok: false, reason: '顶层不是 {digest: [...]}' };
+  }
+  if (parsed.digest.length === 0) return { ok: false, reason: 'digest 是空数组' };
+
+  const byId = new Map(emails.map((mail) => [mail.id, mail]));
+  const seen = new Set();
+  let previous = Infinity;
+
+  for (const [index, item] of parsed.digest.entries()) {
+    const at = `第 ${index + 1} 条`;
+    if (!item || typeof item !== 'object') return { ok: false, reason: `${at}不是对象` };
+    if (typeof item.id !== 'string' || !byId.has(item.id)) return { ok: false, reason: `${at}的 id 不在输入里` };
+    if (seen.has(item.id)) return { ok: false, reason: `${at}的 id 重复` };
+    seen.add(item.id);
+    if (!Number.isInteger(item.importance)) return { ok: false, reason: `${at}的 importance 不是整数` };
+    if (typeof item.summary !== 'string' || item.summary.trim() === '') return { ok: false, reason: `${at}的 summary 为空` };
+    if (item.summary.length > 60) return { ok: false, reason: `${at}的 summary 超过 60 字` };
+    if (item.url !== byId.get(item.id).url) return { ok: false, reason: `${at}的 url 与输入不一致` };
+    if (item.importance > previous) return { ok: false, reason: `${at}没有按重要性从高到低排列` };
+    previous = item.importance;
+  }
+  return { ok: true, items: parsed.digest };
+}
+
+async function requestDigest(emails) {
+  const payload = emails.map(({ id, from, subject, receivedAt, url, body }) =>
+    ({ id, from, subject, receivedAt, url, body }));
+  const prompt = `${DIGEST_PROMPT_HEAD}\n${JSON.stringify(payload, null, 2)}`;
+
+  // trigger="app"：这是应用自己在后台发起的，不是用户说的话。
+  // 级别 1/2 下它照样会弹确认框——这正说明"能不能在后台悄悄用 AI"
+  // 由用户给的信任级别决定，不由应用自己说了算。
+  const first = await ask({ content: prompt, trigger: 'app', timeoutSec: 90 });
+  let check = validateDigest(extractJson(first), emails);
+  if (check.ok) return check.items;
+
+  // 只重试一次：带上第一条失败原因。真实产品这里该有退避和降级，示例不铺开。
+  const second = await ask({ content: repairPrompt(check.reason), trigger: 'app', timeoutSec: 90 });
+  check = validateDigest(extractJson(second), emails);
+  if (check.ok) return check.items;
+
+  const error = new Error(`格式两次都不对：${check.reason}`);
+  error.raw = first;
+  throw error;
+}
+
+// ============================================================================
+// 6. 模拟邮件
+// ============================================================================
+const EMAILS = [
+  {
+    id: 'm1', from: '张伟', subject: '周三评审会材料',
+    receivedAt: '2026-11-14T10:24:00+08:00', url: 'https://mail.example.com/m1',
+    body: `评审会改到周三下午两点，材料请在今天下班前发我。\n\n重点两页：本季度指标完成情况、下季度资源申请。`,
+  },
+  {
+    id: 'm2', from: '李娜', subject: '合同附件请确认',
+    receivedAt: '2026-11-14T09:05:00+08:00', url: 'https://mail.example.com/m2',
+    body: `附件是最终版合同，法务已经过了一遍。\n\n今天下午 18:00 前要回复确认，否则对方要顺延到下个工作日。`,
+  },
+  {
+    id: 'm3', from: '系统通知', subject: '本月账单已生成',
+    receivedAt: '2026-11-14T08:00:00+08:00', url: 'https://mail.example.com/m3',
+    body: `您 11 月的账单已生成，金额 1,284.00 元，可在控制台查看明细。`,
+  },
+  {
+    id: 'm4', from: '王强', subject: '周末团建报名',
+    receivedAt: '2026-11-13T19:40:00+08:00', url: 'https://mail.example.com/m4',
+    body: `这周六团建，地点在城西，报名表在群里，周三前填一下就行。`,
+  },
+];
+
+// ============================================================================
+// 7. 界面
+// ============================================================================
+let selectedId = EMAILS[0].id;
+let digestByMail = new Map();
+
+function renderList() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  for (const mail of EMAILS) {
+    const item = document.createElement('div');
+    item.className = 'item' + (mail.id === selectedId ? ' active' : '');
+    item.onclick = () => { selectedId = mail.id; renderList(); renderReader(); };
+
+    const main = document.createElement('div');
+    main.className = 'item-main';
+    main.innerHTML = `<div class="item-from">${mail.from}</div><div class="item-subject">${mail.subject}</div>`;
+    item.appendChild(main);
+
+    const digest = digestByMail.get(mail.id);
+    if (digest) {
+      const chip = document.createElement('span');
+      chip.className = 'chip' + (digest.importance >= 3 ? ' hot' : '');
+      chip.textContent = digest.importance >= 3 ? '急' : '可延后';
+      chip.title = digest.summary;
+      item.appendChild(chip);
+    }
+    list.appendChild(item);
+  }
+}
+
+function renderReader() {
+  const mail = EMAILS.find((row) => row.id === selectedId);
+  document.getElementById('subject').textContent = mail.subject;
+  document.getElementById('meta').textContent = `${mail.from} · ${new Date(mail.receivedAt).toLocaleString('zh-CN')}`;
+  document.getElementById('body').textContent = mail.body;
+  document.getElementById('draft').value = '';
+  document.getElementById('draftError').textContent = '';
+  document.getElementById('draftHint').textContent = '';
+  document.getElementById('refineBtn').disabled = true;
+}
+
+// 把内部错误翻成一句人话。页面只显示这一句，详细原因留给开发者看控制台。
+function describeError(error) {
+  const detail = error.body?.message ?? '';
+  const map = {
+    credential: '凭证失效，再点一次会重新申请（会弹一次确认框）。',
+    denied: '这个应用被禁用了。请到「设置 → 应用权限」里解除。',
+    rejected: '你在确认框里拒绝了这次请求。',
+    conflict: '会话不在 Relay 工作区里，请使用 main。',
+    expired: '排队太久被作废了，可以再点一次。',
+    unavailable: '主机上没有可用的确认窗口，需要人到主机上操作。',
+    'auth-timeout': '确认超时了，再点一次会重新弹框。',
+    network: '连不上 Relay 服务。确认插件已启用，且地址是 127.0.0.1:3080。',
+    request: `请求被拒绝：${detail}（这是调用方的问题，改代码，不要重试）`,
+    server: 'Relay 内部出错，稍后再试。',
+    missing: '找不到这次任务，可能已被清理。',
+    timeout: '等待超时，可以再点一次。',
+    task: `任务执行失败：${error.body?.code ?? ''} ${detail}`.trim(),
+  };
+  return map[error.kind] ?? `未知错误：${error.message ?? error}`;
+}
+
+function showDraftError(error) {
+  document.getElementById('draftError').textContent = describeError(error);
+  console.error('[relay]', error);
+}
+
+// 主动请求：用户点了按钮，所以 trigger="user"。
+document.getElementById('draftBtn').onclick = async () => {
+  const mail = EMAILS.find((row) => row.id === selectedId);
+  const button = document.getElementById('draftBtn');
+  const draft = document.getElementById('draft');
+  button.disabled = true;
+  draft.value = '';
+  document.getElementById('draftError').textContent = '';
+  document.getElementById('draftHint').textContent = '正在生成…';
+
+  try {
+    const content = `请帮我回复这封邮件。
+
+发件人：${mail.from}
+主题：${mail.subject}
+正文：${mail.body}
+
+要求：中文，简洁，明确下一步，不要寒暄。`;
+    const answer = await streamAsk({
+      content, trigger: 'user',
+      onDelta: (text, sofar) => { draft.value = sofar; },
+    });
+    draft.value = answer;
+    document.getElementById('draftHint').textContent = '已生成。可以改，或点「再正式一点」。';
+    document.getElementById('refineBtn').disabled = false;
+  } catch (error) {
+    showDraftError(error);
+    document.getElementById('draftHint').textContent = '';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+document.getElementById('refineBtn').onclick = async () => {
+  const button = document.getElementById('refineBtn');
+  const draft = document.getElementById('draft');
+  const previous = draft.value.trim();
+  if (!previous) return;
+  button.disabled = true;
+  document.getElementById('draftHint').textContent = '改写中…';
+
+  try {
+    // 只发一句话 + 上一稿：靠同一会话的上下文完成改写。
+    const answer = await streamAsk({
+      content: `把下面这封回复改得更正式一些，意思不变。\n\n上一稿：\n${previous}`,
+      trigger: 'user',
+      onDelta: (text, sofar) => { draft.value = sofar; },
+    });
+    draft.value = answer;
+    document.getElementById('draftHint').textContent = '已改写。';
+  } catch (error) {
+    showDraftError(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+// 后台请求：由应用自己发起，trigger="app"。
+// 这里的按钮只是模拟——真实产品里它由每天固定时间的定时器触发，例如：
+//   setInterval(runDigest, 24 * 60 * 60 * 1000)
+// 或者由后端 cron / 系统计划任务发起，页面根本不需要打开。
+// 失败时不打扰用户：不弹提示，只在状态行留一行字。
+document.getElementById('digestBtn').onclick = async () => {
+  const button = document.getElementById('digestBtn');
+  const status = document.getElementById('digestStatus');
+  const raw = document.getElementById('digestRaw');
+  button.disabled = true;
+  status.textContent = '后台处理中…';
+  raw.style.display = 'none';
+
+  try {
+    const items = await requestDigest(EMAILS);
+    digestByMail = new Map(items.map((item) => [item.id, item]));
+    renderList();
+
+    const list = document.getElementById('digestList');
+    list.innerHTML = '';
+    for (const item of items) {
+      const mail = EMAILS.find((row) => row.id === item.id);
+      const li = document.createElement('li');
+      li.textContent = item.summary;
+      const link = document.createElement('a');
+      link.href = item.url;
+      link.textContent = '打开';
+      link.onclick = (event) => {
+        // 演示里链接指回本地这封信；真实产品会直接跳转到邮箱。
+        event.preventDefault();
+        selectedId = mail.id;
+        renderList();
+        renderReader();
+      };
+      li.appendChild(link);
+      list.appendChild(li);
+    }
+    status.textContent = `已生成 ${items.length} 条，按重要性排列。`;
+  } catch (error) {
+    // 后台失败要安静：不弹窗、不打断，只留一行状态。
+    status.textContent = `小报生成失败：${describeError(error)}`;
+    console.error('[relay]', error);
+    if (error.raw) {
+      raw.textContent = error.raw;
+      raw.style.display = 'block';
+    }
+  } finally {
+    button.disabled = false;
+  }
+};
+
+// 流式聊天：最小形态的 SSE 用法。同一套 streamAsk，只是把增量直接铺在页面上。
+const chatInput = document.getElementById('chatInput');
+const chatBtn = document.getElementById('chatBtn');
+const chatOut = document.getElementById('chatOut');
+
+async function sendChat() {
+  const text = chatInput.value.trim();
+  if (text === '' || chatBtn.disabled) return;
+  chatBtn.disabled = true;
+  chatOut.textContent = '';
+  document.getElementById('chatError').textContent = '';
+  try {
+    const answer = await streamAsk({
+      content: text,
+      trigger: 'user',
+      onDelta: (_chunk, sofar) => { chatOut.textContent = sofar; },
+    });
+    if (answer) chatOut.textContent = answer;
+  } catch (error) {
+    document.getElementById('chatError').textContent = describeError(error);
+    console.error('[relay]', error);
+  } finally {
+    chatBtn.disabled = false;
+  }
+}
+
+chatBtn.onclick = sendChat;
+chatInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    sendChat();
+  }
+});
+
+renderList();
+renderReader();
+refreshStatus();
+</script>
+</body>
+</html>

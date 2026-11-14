@@ -127,17 +127,18 @@ curl -N -X POST http://127.0.0.1:3080/x/relay/submit \
 
 | 文件 | 内容 |
 |---|---|
-| [relay-guide.md](../../relay-guide.md) | 接入方文档：接口、字段、错误码、示例 |
-| [relay-demo.html](../../relay-demo.html) | 可运行的单文件示例 |
-| [relay-reference.md](../../relay-reference.md) | 维护者参考：内部结构、不变式、扩展点 |
-| [relay-plan.md](../../relay-plan.md) | 设计：契约与取舍 |
-| [relay-auth-plan.md](../../relay-auth-plan.md) | 鉴权设计 |
+| [docs/guide.md](docs/guide.md) | 接入方文档：接口、字段、错误码、示例 |
+| [docs/demo.html](docs/demo.html) | 可运行的单文件示例（收件箱 + 小报 + 流式对话） |
+| [docs/reference.md](docs/reference.md) | 维护者参考：内部结构、不变式、扩展点 |
+| [docs/plan.md](docs/plan.md) | 设计：契约与取舍 |
+| [docs/auth-plan.md](docs/auth-plan.md) | 鉴权设计 |
+| [docs/status.md](docs/status.md) | 实现状态与已知限制 |
 
 ---
 
 ## 文档位置
 
-本 README 随包分发；其余文档（接入指南、示例、设计稿）在仓库根目录，不在 npm 包里。
+本 README 随包分发；其余文档在仓库的 `docs/` 目录，不在 npm 包里。
 
 ## License
 
