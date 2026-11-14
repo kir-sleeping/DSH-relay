@@ -71,7 +71,7 @@ curl -N -X POST http://127.0.0.1:3080/x/relay/submit \
   -d '{"content":"介绍一下这个项目","source":"my-app","fingerprint":"…","trigger":"user","stream":true}'
 ```
 
-完整契约见下面的「接口」一节，可运行的示例见 [docs/demo.html](docs/demo.html)。
+完整契约见下面的「接口」一节；逐项说明和常见坑见 [docs/integration.md](docs/integration.md)，可运行的示例见 [docs/demo.html](docs/demo.html)。
 
 ---
 
@@ -192,11 +192,12 @@ event: end        data: {"id","status","content"}   status: completed|error|time
 
 ## 文档
 
-| 文件 | 内容 |
-|---|---|
-| [docs/usage.md](docs/usage.md) | 普通使用者看的：权限级别、弹窗什么时候出现、怎么管 |
-| [docs/reference.md](docs/reference.md) | 要改代码的人看的：内部结构、不变式、扩展点 |
-| [docs/demo.html](docs/demo.html) | 可运行的单文件示例：收件箱 + 每日小报 + 流式对话 |
+| 文件 | 读者 | 内容 |
+|---|---|---|
+| [docs/integration.md](docs/integration.md) | 写应用的人 | 接入契约：session、trigger、后台任务、错误处理 |
+| [docs/usage.md](docs/usage.md) | 普通用户 | 权限级别、弹窗什么时候出现、怎么管理 |
+| [docs/reference.md](docs/reference.md) | 改插件的人 | 内部结构、不变式、扩展点 |
+| [docs/demo.html](docs/demo.html) | 写应用的人 | 可运行的单文件示例：收件箱 + 每日小报 + 流式对话 |
 
 ---
 
