@@ -38,26 +38,13 @@
 
 ## 安装
 
-当前以本地链接方式安装（开发形态）：
-
-```bash
-# 在 DSH 里
-plugin_manager install_bundle /path/to/plugins/relay
-```
-
-或命令行：
-
-```bash
-dsh plugin add link:/path/to/plugins/relay
-```
-
-> 发布到 registry 之后：
-
 ```bash
 dsh plugin add @kir_sleeping/dsh-relay
 ```
 
-`link:` 会把绝对路径写进 profile，只适合本机开发。
+开发时用软链安装（`dsh plugin add link:<本机源码目录>`），改代码即生效，不用反复打包。
+
+> 开发与发布的注意事项写在 `index.js` 头部注释里，改代码前先看那段。
 
 安装后插件自动加载，并在 `$DSH_HOME/relay/workspace` 下建一个名为「外部任务」的会话。
 
