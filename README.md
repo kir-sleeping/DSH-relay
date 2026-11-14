@@ -71,7 +71,7 @@ curl -N -X POST http://127.0.0.1:3080/x/relay/submit \
   -d '{"content":"介绍一下这个项目","source":"my-app","fingerprint":"…","trigger":"user","stream":true}'
 ```
 
-完整的接入说明见 [开发者文档](../../relay-guide.md)，可运行的示例见 [relay-demo.html](../../relay-demo.html)。
+完整契约见下面的「接口」一节，可运行的示例见 [docs/demo.html](docs/demo.html)。
 
 ---
 
@@ -123,16 +123,80 @@ curl -N -X POST http://127.0.0.1:3080/x/relay/submit \
 
 ---
 
+## 接口
+
+全部挂在 `http://127.0.0.1:3080/x/relay`（前缀可配置）。
+
+### `POST /fingerprint`　`{source}`
+
+首次接入。会在主机上弹系统确认框，用户点「允许」才返回凭证，级别固定为 1。阻塞最长 60 秒。
+
+```json
+{"source":"my-app","fingerprint":"…","level":1}
+```
+
+### `POST /submit`
+
+| 字段 | 必填 | 说明 |
+|---|:---:|---|
+| `content` | ✅ | 交给 agent 的内容 |
+| `source` | ✅ | 应用标识，`[A-Za-z0-9_-]{1,64}` |
+| `fingerprint` | ✅ | 凭证 |
+| `trigger` | | `user` 用户亲手触发 / `app` 应用自己在后台发起。缺省 `app` |
+| `session` | | 会话名，缺省 `main` |
+| `wait` | | 挂住连接等结果 |
+| `stream` | | 返回 SSE，优先于 `wait` |
+| `timeout` | | 等待秒数，缺省 120，上限 3600 |
+
+响应：`202` 已受理 / `200` 有结果 / `410` 排队超时作废 / `4xx` 请求或授权问题。
+
+结果体：`{"id","session","source","type":"final","content"}` 或 `{"type":"error","code","message"}`。
+
+### `GET /result/{id}`
+
+`202` 未完成 · `200` 已完成 · `404` 不存在 · `410` 已作废。结果过期会从会话日志重建。
+
+### `GET /sessions?source=&fingerprint=`
+
+列出 Relay 工作区里的会话，需要凭证。
+
+### `GET /sources`
+
+登记列表（无凭证），供设置页读取。只暴露"有哪些应用接过入"。
+
+### 流式事件
+
+```
+event: accepted   data: {"id","session","source"}
+event: content    data: {"id","text"}        ← 回答增量，拼接即完整回答
+event: reasoning  data: {"id","text"}        ← 思考增量，可能没有
+event: error      data: {"id","code","message"}
+event: end        data: {"id","status","content"}   status: completed|error|timeout|expired
+```
+
+准入失败时不开流，仍返回普通 JSON——按 `Content-Type` 区分。
+
+### 错误码
+
+| code | HTTP | 含义 |
+|---|---|---|
+| `ERR_TRIGGER` / `ERR_CONTENT` / `ERR_SOURCE` / `ERR_SESSION` / `ERR_TIMEOUT` | 400 | 请求字段有问题 |
+| `ERR_INPUT_FINGERPRINT` | 401 | 缺凭证或不匹配 |
+| `ERR_ACCESS_DENIED` | 403 | 来源在禁止名单 |
+| `ERR_AUTH_DENIED` | 403 | 用户当场拒绝 |
+| `ERR_AUTH_TIMEOUT` | 504 | 确认超时 |
+| `ERR_AUTH_UNAVAILABLE` | 503 | 主机没有可用桌面 |
+| `ERR_SESSION_OUTSIDE_WORKSPACE` | 409 | 会话不在 Relay 工作区 |
+| `ERR_QUEUE_EXPIRED` | 410 | 排队超时作废 |
+| `ERR_RESULT_NOT_FOUND` | 404 | 没有这个编号 |
+
 ## 文档
 
 | 文件 | 内容 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 接入方文档：接口、字段、错误码、示例 |
-| [docs/demo.html](docs/demo.html) | 可运行的单文件示例（收件箱 + 小报 + 流式对话） |
-| [docs/reference.md](docs/reference.md) | 维护者参考：内部结构、不变式、扩展点 |
-| [docs/plan.md](docs/plan.md) | 设计：契约与取舍 |
-| [docs/auth-plan.md](docs/auth-plan.md) | 鉴权设计 |
-| [docs/status.md](docs/status.md) | 实现状态与已知限制 |
+| [docs/usage.md](docs/usage.md) | 普通使用者看的：权限级别、弹窗什么时候出现、怎么管 |
+| [docs/reference.md](docs/reference.md) | 要改代码的人看的：内部结构、不变式、扩展点 |
+| [docs/demo.html](docs/demo.html) | 可运行的单文件示例：收件箱 + 每日小报 + 流式对话 |
 
 ---
 

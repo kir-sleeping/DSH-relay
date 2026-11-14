@@ -1,6 +1,6 @@
 # Relay · 开发者参考
 
-面向要改这个插件的人。接入方看 [guide.md](guide.md)，设计取舍看 [plan.md](plan.md)。
+面向要改这个插件的人。只是使用的话看 [usage.md](usage.md) 就够了。
 
 ---
 
@@ -112,7 +112,7 @@ turn 在进入 step 之前就失败时（例如没有可用模型），日志里
 
 **加一个级别**：改 `LEVELS`、`LEVEL_LABEL`、`admitMessage` 的判定，以及设置页的下拉项。
 
-**加一个流式事件**：`onAssistantStream` 里按 `chunk.type` 分支，`finishStream` 里补结束帧。协议变更要同步 `guide.md` 的事件表。
+**加一个流式事件**：`onAssistantStream` 里按 `chunk.type` 分支，`finishStream` 里补结束帧。协议变更要同步 README 里的事件表。
 
 **加一个端点**：`handle()` 里加分支 + 一个 `handleXxx`，沿用 `readObject` / `fail` / `sendJson` 三个工具。
 
