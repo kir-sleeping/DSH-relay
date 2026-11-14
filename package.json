@@ -1,6 +1,6 @@
 {
   "name": "@kir_sleeping/dsh-relay",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Relays local application requests to a DeepSeek Harness agent over HTTP.",
   "license": "MIT",
   "author": "sleeping",
