@@ -1,0 +1,55 @@
+{
+  "name": "@kir_sleeping/dsh-relay",
+  "version": "0.1.0",
+  "description": "Relays local application requests to a DeepSeek Harness agent over HTTP.",
+  "license": "MIT",
+  "author": "sleeping",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kir-sleeping/dsh-relay.git"
+  },
+  "homepage": "https://github.com/kir-sleeping/dsh-relay#readme",
+  "bugs": {
+    "url": "https://github.com/kir-sleeping/dsh-relay/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agent",
+    "http",
+    "relay",
+    "bridge"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "native-dialog.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

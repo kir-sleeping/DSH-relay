@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Relay",
+    "description": "Relays local application requests to this agent over HTTP on the harness port. External sessions live in their own workspace."
+  }
+}

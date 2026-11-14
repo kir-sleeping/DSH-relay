@@ -1,0 +1,4 @@
+- insert:
+    - id: relay
+      name: '@kir_sleeping/dsh-relay'
+      config: {}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Relay",
+    "description": "让本机应用通过 HTTP 把任务交给这个 agent。外部会话单独放在一个工作区里。"
+  }
+}
