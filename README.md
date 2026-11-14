@@ -12,6 +12,14 @@
 
 ---
 
+**从这里开始**
+
+- 我只是想用 → [使用说明](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/usage.md)
+- 我要写一个应用接进来 → [外部接入指南](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/integration.md) · [可运行示例](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/demo.html)
+- 我要改这个插件 → [开发者参考](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/reference.md)
+
+---
+
 ## 它解决什么
 
 现在的 AI 是每个应用各配一个，彼此失忆：你在每个里面都要重新解释一遍自己。Relay 把这件事反过来——**agent 在应用外面，应用来调它**。
@@ -71,7 +79,7 @@ curl -N -X POST http://127.0.0.1:3080/x/relay/submit \
   -d '{"content":"介绍一下这个项目","source":"my-app","fingerprint":"…","trigger":"user","stream":true}'
 ```
 
-完整契约见下面的「接口」一节；逐项说明和常见坑见 [docs/integration.md](docs/integration.md)，可运行的示例见 [docs/demo.html](docs/demo.html)。
+完整契约见下面的「接口」一节；逐项说明和常见坑见 [docs/integration.md](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/integration.md)，可运行的示例见 [docs/demo.html](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/demo.html)。
 
 ---
 
@@ -194,16 +202,14 @@ event: end        data: {"id","status","content"}   status: completed|error|time
 
 | 文件 | 读者 | 内容 |
 |---|---|---|
-| [docs/integration.md](docs/integration.md) | 写应用的人 | 接入契约：session、trigger、后台任务、错误处理 |
-| [docs/usage.md](docs/usage.md) | 普通用户 | 权限级别、弹窗什么时候出现、怎么管理 |
-| [docs/reference.md](docs/reference.md) | 改插件的人 | 内部结构、不变式、扩展点 |
-| [docs/demo.html](docs/demo.html) | 写应用的人 | 可运行的单文件示例：收件箱 + 每日小报 + 流式对话 |
+| [docs/integration.md](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/integration.md) | 写应用的人 | 接入契约：session、trigger、后台任务、错误处理 |
+| [docs/usage.md](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/usage.md) | 普通用户 | 权限级别、弹窗什么时候出现、怎么管理 |
+| [docs/reference.md](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/reference.md) | 改插件的人 | 内部结构、不变式、扩展点 |
+| [docs/demo.html](https://github.com/kir-sleeping/DSH-relay/blob/main/docs/demo.html) | 写应用的人 | 可运行的单文件示例：收件箱 + 每日小报 + 流式对话 |
 
 ---
 
-## 文档位置
-
-本 README 随包分发；其余文档在仓库的 `docs/` 目录，不在 npm 包里。
+> 本 README 随包分发；其余文档在仓库的 `docs/` 目录，不在 npm 包里，所以上面的链接都指向 GitHub。
 
 ## License
 
