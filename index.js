@@ -508,9 +508,40 @@ export function apply(ctx, config) {
     return options
   }
 
+  /**
+   * 解析并挂载 agent 预设。
+   *
+   * 不挂预设的 agent 拿到的是主机层的裸组合：没有 AGENTS.md 指令链，也没有工具
+   * （bash / 文件 / 网络全在预设里才启用）。外部会话要能和 agent 正常对话并读工作区
+   * 的记忆文件，必须挂上默认预设。
+   *
+   * 代价：外部应用因此能驱动完整工具集。当前版本刻意选激进，等权限系统升级后
+   * 再收窄到专用预设。
+   */
+  async function agentComposition() {
+    const presets = ctx.get('agentPresets')
+    if (!presets || typeof presets.resolve !== 'function' || typeof presets.mount !== 'function') {
+      return { presetId: undefined, setup: undefined }
+    }
+    try {
+      const preset = await presets.resolve()
+      const presetId = preset && typeof preset.id === 'string' ? preset.id : undefined
+      if (presetId === undefined) return { presetId: undefined, setup: undefined }
+      return {
+        presetId,
+        setup: async (agentCtx) => {
+          await presets.mount(agentCtx, presetId)
+        },
+      }
+    } catch {
+      return { presetId: undefined, setup: undefined }
+    }
+  }
+
   async function createOrResume(sessionName) {
     const agentOptions = modelOptions()
     await ensureWorkspace()
+    const composition = await agentComposition()
 
     const header = await readHeader(sessionName)
     if (header) {
@@ -529,6 +560,7 @@ export function apply(ctx, config) {
       const handle = await ctx.agents.resume({
         resumeSessionId: sessionName,
         ...(agentOptions ? { agentOptions } : {}),
+        ...(composition.setup ? { setup: composition.setup } : {}),
       })
       await attach(handle.agent.id)
       return handle.agent
@@ -536,8 +568,12 @@ export function apply(ctx, config) {
 
     const handle = await ctx.agents.create({
       sessionId: sessionName,
-      meta: { cwd: workspace.path },
+      meta: {
+        cwd: workspace.path,
+        ...(composition.presetId ? { agentPreset: composition.presetId } : {}),
+      },
       ...(agentOptions ? { agentOptions } : {}),
+      ...(composition.setup ? { setup: composition.setup } : {}),
     })
     try {
       const titles = ctx.get('sessionTitle')
