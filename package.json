@@ -6,11 +6,11 @@
   "author": "sleeping",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kir-sleeping/dsh-relay.git"
+    "url": "git+https://github.com/kir-sleeping/DSH-relay.git"
   },
-  "homepage": "https://github.com/kir-sleeping/dsh-relay#readme",
+  "homepage": "https://github.com/kir-sleeping/DSH-relay#readme",
   "bugs": {
-    "url": "https://github.com/kir-sleeping/dsh-relay/issues"
+    "url": "https://github.com/kir-sleeping/DSH-relay/issues"
   },
   "keywords": [
     "dsh",
