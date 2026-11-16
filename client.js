@@ -20,7 +20,23 @@ window.__ModuleLoader__.load({
     ]
 
     const styles = {
-      intro: { opacity: 0.75, lineHeight: 1.6, margin: '0 0 16px' },
+      header: {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, margin: '0 0 12px',
+      },
+      hint: { opacity: 0.7, fontSize: 13, lineHeight: 1.6 },
+      helpButton: {
+        font: 'inherit', fontSize: 13, width: 24, height: 24, lineHeight: '22px',
+        textAlign: 'center', cursor: 'pointer', color: 'inherit', background: 'transparent',
+        border: '1px solid currentColor', borderRadius: 999, opacity: 0.7, flex: 'none',
+      },
+      help: {
+        margin: '0 0 16px', padding: '12px 14px', borderRadius: 8,
+        border: '1px solid currentColor', fontSize: 13, lineHeight: 1.75, opacity: 0.9,
+      },
+      helpTitle: { fontWeight: 600, margin: '0 0 8px' },
+      helpList: { margin: '0 0 12px', paddingLeft: 18 },
+      helpItem: { margin: '0 0 6px' },
       table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
       th: { textAlign: 'left', fontWeight: 600, padding: '6px 8px', borderBottom: '1px solid currentColor', opacity: 0.6 },
       td: { padding: '8px', borderBottom: '1px solid currentColor', verticalAlign: 'middle' },
@@ -65,6 +81,7 @@ window.__ModuleLoader__.load({
       const [rows, setRows] = React.useState([])
       const [error, setError] = React.useState('')
       const [busy, setBusy] = React.useState(false)
+      const [helpOpen, setHelpOpen] = React.useState(false)
 
       const load = React.useCallback(async () => {
         try {
@@ -112,11 +129,45 @@ window.__ModuleLoader__.load({
               : h('button', { style: styles.button, disabled: busy, onClick: () => run('/sources/clear', { source: row.source }) }, '解除禁止'),
             h('button', { style: styles.button, disabled: busy, onClick: () => run('/sources/delete', { source: row.source }) }, '删除')))))
 
+      const help = h('div', { style: styles.help },
+        h('p', { style: styles.helpTitle }, '四个级别分别是什么意思'),
+        h('ul', { style: styles.helpList },
+          h('li', { style: styles.helpItem },
+            h('b', null, '0 禁止'),
+            '　直接拒绝，不弹窗，应用收不到任何回应。'),
+          h('li', { style: styles.helpItem },
+            h('b', null, '1 每条确认'),
+            '　应用每发一条消息都弹一次系统确认框。新接入的应用默认是这一级。'),
+          h('li', { style: styles.helpItem },
+            h('b', null, '2 信任已确认标记'),
+            '　应用声明是你亲手触发的就放行；它自己在后台发起的仍然弹窗。'),
+          h('li', { style: styles.helpItem },
+            h('b', null, '3 完全信任'),
+            '　不再询问，直接执行。')),
+        h('p', { style: styles.helpTitle }, '给权限前请想清楚'),
+        h('ul', { style: styles.helpList },
+          h('li', { style: styles.helpItem },
+            '这套权限防的是',
+            h('b', null, '有害请求'),
+            '，不是防你自己。你信任的应用可以给 3 级——那样它全程没有弹窗，用起来才顺。'),
+          h('li', { style: styles.helpItem },
+            h('b', null, '3 级就是全权限：'),
+            'agent 能读写文件、执行命令、联网。只给自己写的或完全信得过的应用。'),
+          h('li', { style: styles.helpItem },
+            '放宽权限（提高级别、重置凭证）会弹一次系统确认框；收紧（降低级别、禁止）立即生效，不弹窗。'),
+          h('li', { style: styles.helpItem },
+            '拿不准就留在 1 级，先看着它跑几次再决定。')))
+
       return h('div', null,
-        h('p', { style: styles.intro },
-          '这里的每个应用都能把任务交给同一个 agent，并共享「外部任务」会话的上下文。',
-          '「完全信任」意味着它可以在不询问你的情况下让 agent 执行任何操作；',
-          '提高权限会弹出一次系统确认框。'),
+        h('div', { style: styles.header },
+          h('span', { style: styles.hint }, '各权限级别的含义和给权限的注意事项，点右侧问号。'),
+          h('button', {
+            type: 'button',
+            style: styles.helpButton,
+            title: helpOpen ? '收起说明' : '查看说明',
+            onClick: () => setHelpOpen((open) => !open),
+          }, '?')),
+        helpOpen ? help : null,
         error ? h('p', { style: styles.error }, error) : null,
         rows.length === 0
           ? h('p', { style: styles.empty }, '还没有外部应用接入。应用第一次调用时会弹出确认框。')
