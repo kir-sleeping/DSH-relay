@@ -1,6 +1,6 @@
 # Relay
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kir-sleeping/DSH-relay/main/docs/icon/relay-256.png" width="120" alt="Relay">
+  <img src="https://raw.githubusercontent.com/kir-sleeping/DSH-relay/main/docs/icon/relay-lockup-512.png" width="200" alt="DSH-Relay">
 </p>
 
 dsh-relay 是一个 DSH 入口中继器，把 DSH 的调用能力开放给本机应用。
