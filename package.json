@@ -1,6 +1,6 @@
 {
   "name": "@kir_sleeping/dsh-relay",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Relays local application requests to a DeepSeek Harness agent over HTTP.",
   "license": "MIT",
   "author": "sleeping",
@@ -25,7 +25,9 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./icon.ico": "./icon.ico",
+    "./icon.png": "./icon.png"
   },
   "files": [
     "index.js",
@@ -35,7 +37,9 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "icon.ico",
+    "icon.png"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"

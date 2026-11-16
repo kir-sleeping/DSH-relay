@@ -36,7 +36,7 @@ import { confirm } from './native-dialog.js'
 
 export const name = 'relay'
 
-export const inject = ['webServer', 'agents', 'sessionQuery', 'workspaceRegistry', 'credentials']
+export const inject = ['webServer', 'agents', 'sessionQuery', 'workspaceRegistry', 'credentials', 'sessionController']
 
 /** 会话名与 source 共用的字符集；`~` 被留作 id 分隔符。 */
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
@@ -44,6 +44,13 @@ const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
 const DEFAULT_TITLE = '外部任务'
 
 const MAX_BODY_BYTES = 1024 * 1024
+
+/** submit 要收图片，单独放宽；其它路由维持 1MB。 */
+const MAX_SUBMIT_BODY_BYTES = 12 * 1024 * 1024
+
+const MAX_IMAGES = 4
+const MAX_IMAGE_BASE64 = 8 * 1024 * 1024
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 /** 凭证记录的 key 前缀。 */
 const SOURCE_PREFIX = 'relay/'
@@ -312,7 +319,7 @@ export function apply(ctx, config) {
    * 用户放行一次，不等于这句话是用户说的。后台发起的消息无论如何都不会被
    * 标记成用户发言——包括用户点过允许的情况。
    */
-  async function admitMessage(source, record, trigger, content) {
+  async function admitMessage(source, record, trigger, content, imageCount) {
     if (record.level === 0) {
       return { ok: false, status: 403, code: 'ERR_ACCESS_DENIED', message: '这个来源处于禁止名单。' }
     }
@@ -320,10 +327,11 @@ export function apply(ctx, config) {
     const needsConfirm = record.level === 1 || (record.level === 2 && trigger !== 'user')
     if (!needsConfirm) return { ok: true, approved: true }
 
+    const suffix = imageCount > 0 ? `\n\n（含 ${imageCount} 张图片）` : ''
     const answer = await askUser(
       trigger === 'user'
-        ? `应用「${source}」请求发送一条消息，是否允许？`
-        : `应用「${source}」在后台请求处理一条消息，是否允许？`,
+        ? `「${source}」请求发送一条消息，是否允许？${suffix}`
+        : `「${source}」在后台请求处理一条消息，是否允许？${suffix}`,
       { detail: content },
     )
     if (answer.reason !== 'answered') return dialogFailure(answer)
@@ -727,8 +735,10 @@ export function apply(ctx, config) {
   function onInboxClaimed(payload) {
     const agent = payload && payload.agent
     const message = payload && payload.message
-    if (!agent || !message || typeof message.id !== 'string') return
-    const task = byMessage.get(message.id)
+    if (!agent || !message) return
+    const rpcId = message.source && typeof message.source.rpcId === 'string' ? message.source.rpcId : undefined
+    if (rpcId === undefined) return
+    const task = byMessage.get(rpcId)
     if (!task || task.state !== 'pending' || task.claimed) return
     task.turn = payload.turn
     task.claimed = true
@@ -808,7 +818,11 @@ export function apply(ctx, config) {
 
     const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
     const index = events.findIndex(
-      (event) => event && event.type === 'user/message' && event.data && event.data.id === id,
+      (event) => event
+        && event.type === 'user/message'
+        && event.data
+        && event.data.source
+        && event.data.source.rpcId === id,
     )
     if (index < 0) return null
 
@@ -897,13 +911,13 @@ export function apply(ctx, config) {
     sendJson(res, status, { code, message }, origin)
   }
 
-  function readJson(req) {
+  function readJson(req, limit = MAX_BODY_BYTES) {
     return new Promise((resolve, reject) => {
       const chunks = []
       let size = 0
       req.on('data', (chunk) => {
         size += chunk.length
-        if (size > MAX_BODY_BYTES) {
+        if (size > limit) {
           reject(new Error('request body too large'))
           req.destroy()
           return
@@ -1101,10 +1115,64 @@ export function apply(ctx, config) {
     }
   }
 
+  /** 校验客户端发来的图片数组，转成 prompt 的 content parts。 */
+  function buildImageParts(input) {
+    if (input === undefined) return []
+    if (!Array.isArray(input) || input.length === 0) {
+      throw new RelayError('ERR_IMAGE', 'images 必须是非空数组。', 400)
+    }
+    if (input.length > MAX_IMAGES) {
+      throw new RelayError('ERR_IMAGE_COUNT', `一次最多 ${MAX_IMAGES} 张图片。`, 400)
+    }
+
+    const parts = []
+    for (const [index, item] of input.entries()) {
+      if (!item || typeof item !== 'object') {
+        throw new RelayError('ERR_IMAGE', `第 ${index + 1} 张图片不是对象。`, 400)
+      }
+      if (typeof item.mediaType !== 'string' || !IMAGE_TYPES.has(item.mediaType)) {
+        throw new RelayError(
+          'ERR_IMAGE_TYPE',
+          `第 ${index + 1} 张图片的 mediaType 只支持 ${[...IMAGE_TYPES].join(' / ')}。`,
+          400,
+        )
+      }
+      if (typeof item.data !== 'string' || item.data === '') {
+        throw new RelayError('ERR_IMAGE', `第 ${index + 1} 张图片缺少 base64 数据。`, 400)
+      }
+      if (item.data.length > MAX_IMAGE_BASE64) {
+        throw new RelayError('ERR_IMAGE_SIZE', `第 ${index + 1} 张图片超过大小上限。`, 413)
+      }
+      parts.push({ type: 'image', mediaType: item.mediaType, data: item.data })
+    }
+    return parts
+  }
+
+  /** 把 sessionController 抛出的 RemoteError 翻成我们自己的错误码。 */
+  function mapPromptError(error) {
+    const code = error && typeof error.code === 'string' ? error.code : ''
+    const reason = error && error.details && typeof error.details.reason === 'string' ? error.details.reason : ''
+    const message = error && error.message ? String(error.message) : '消息投递失败。'
+
+    if (code === 'session/attachment-invalid') {
+      if (reason === 'MODEL_DOES_NOT_SUPPORT_IMAGES') {
+        return { status: 415, code: 'ERR_MODEL_NO_IMAGE', message: '当前模型不支持图片输入。' }
+      }
+      return { status: 413, code: 'ERR_IMAGE_REJECTED', message }
+    }
+    if (code === 'gateway/bad-request') {
+      return { status: 400, code: 'ERR_BAD_REQUEST', message }
+    }
+    if (code === 'session/agent-busy') {
+      return { status: 409, code: 'ERR_SESSION_BUSY', message }
+    }
+    return { status: 500, code: 'ERR_DELIVERY', message }
+  }
+
   async function handleSubmit(req, res, origin) {
     let body
     try {
-      body = await readJson(req)
+      body = await readJson(req, MAX_SUBMIT_BODY_BYTES)
     } catch {
       fail(res, 400, 'ERR_REQUEST_JSON', '请求体不是合法的 JSON 对象。', origin)
       return
@@ -1151,7 +1219,10 @@ export function apply(ctx, config) {
         fail(res, 401, 'ERR_INPUT_FINGERPRINT', '来源与凭证不匹配。', origin)
         return
       }
-      gate = await admitMessage(source, verified.record, trigger, content)
+      gate = await admitMessage(
+        source, verified.record, trigger, content,
+        Array.isArray(body.images) ? body.images.length : 0,
+      )
     } catch (error) {
       fail(res, 500, 'ERR_INTERNAL', error && error.message ? String(error.message) : '授权检查失败。', origin)
       return
@@ -1202,19 +1273,34 @@ export function apply(ctx, config) {
     tasks.set(id, task)
     byMessage.set(id, task)
 
-    const message = {
-      role: 'user',
-      id,
-      content: [{ type: 'text', text: serialize(content, source, trigger, gate.approved) }],
-      source: { kind: 'user' },
-    }
-
+    let imageParts
     try {
-      agent.followup(message)
+      imageParts = buildImageParts(body.images)
     } catch (error) {
       tasks.delete(id)
       byMessage.delete(id)
-      fail(res, 500, 'ERR_DELIVERY', error && error.message ? String(error.message) : '消息投递失败。', origin)
+      const failure = error instanceof RelayError ? error : new RelayError('ERR_IMAGE', '图片参数不合法。', 400)
+      fail(res, failure.status, failure.code, failure.message, origin)
+      return
+    }
+
+    const parts = [
+      { type: 'text', text: serialize(content, source, trigger, gate.approved) },
+      ...imageParts,
+    ]
+
+    try {
+      // 走 sessionController：模型能力检查、附件准入、图片串行化都在里面，
+      // 比自己去拼 UserMessage 少三处容易漏的地方。
+      await ctx.sessionController.prompt(
+        { requestId: id, sessionId: sessionName, mode: 'queue', content: parts },
+        new AbortController().signal,
+      )
+    } catch (error) {
+      tasks.delete(id)
+      byMessage.delete(id)
+      const failure = mapPromptError(error)
+      fail(res, failure.status, failure.code, failure.message, origin)
       return
     }
 

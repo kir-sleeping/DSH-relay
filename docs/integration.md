@@ -139,7 +139,33 @@ agent 返回的是**自由文本**，不是 API。需要结构化数据时：
 
 ---
 
-## 五、流式
+## 五、图片输入
+
+`content` 是文字，图片单独放在 `images` 里，同一个请求一起发：
+
+```http
+POST /x/relay/submit
+{
+  "content": "这张图里有几处问题？",
+  "images": [
+    {"mediaType": "image/png", "data": "<base64>"}
+  ],
+  "source": "my-app", "fingerprint": "…", "trigger": "user"
+}
+```
+
+- 一次最多 4 张，类型支持 `image/png` / `image/jpeg` / `image/webp` / `image/gif`
+- `data` 是**标准 base64**，不要带 `data:image/png;base64,` 前缀
+- 图片会被存成不可变引用，不会以 base64 进入对话历史
+- 超过上限返回 `413 ERR_IMAGE_SIZE`，类型不对返回 `400 ERR_IMAGE_TYPE`，张数超了返回 `400 ERR_IMAGE_COUNT`
+
+需要注意：
+
+- **不是所有模型都收图。** 当前模型不支持时返回 `415 ERR_MODEL_NO_IMAGE`，请求不会进入对话。
+- 图片和文字在同一个消息里，顺序是「文字包装 → 图片」。文字里可以用「这张图」「第一张」指代。
+- 图片多了成本上升明显，长边压到 1024 左右通常够用。
+
+## 六、流式
 
 ```http
 POST /x/relay/submit
@@ -162,11 +188,13 @@ event: end        data: {"id","status","content"}   status: completed|error|time
 
 ---
 
-## 六、错误与重试
+## 七、错误与重试
 
 | 情况 | 该怎么做 |
 |---|---|
 | `401 ERR_INPUT_FINGERPRINT` | 清掉本地凭证，重新申请一次，再试一次 |
+| `413 ERR_IMAGE_SIZE` / `ERR_IMAGE_REJECTED` | 图片过大或附件服务拒绝，压缩后重试 |
+| `415 ERR_MODEL_NO_IMAGE` | 当前模型不支持图片，换模型或改发文字 |
 | `403 ERR_ACCESS_DENIED` | 用户在黑名单里，**不要重试**，提示他去设置解除 |
 | `403 ERR_AUTH_DENIED` | 用户当场拒绝，**不要重试**，尊重它 |
 | `409 ERR_SESSION_OUTSIDE_WORKSPACE` | 会话不在 Relay 工作区，改用 `main` |
@@ -180,7 +208,7 @@ event: end        data: {"id","status","content"}   status: completed|error|time
 
 ---
 
-## 七、检查清单
+## 八、检查清单
 
 ```
 □ source 固定、唯一、URL 安全
