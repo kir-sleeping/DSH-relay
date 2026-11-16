@@ -50,10 +50,6 @@
 dsh plugin add @kir_sleeping/dsh-relay
 ```
 
-开发时用软链安装（`dsh plugin add link:<本机源码目录>`），改代码即生效，不用反复打包。
-
-> 开发与发布的注意事项写在 `index.js` 头部注释里，改代码前先看那段。
-
 安装后插件自动加载，并在 `$DSH_HOME/relay/workspace` 下建一个名为「外部任务」的会话（目录权限 700）。
 
 首次创建时会写一份 `AGENTS.md`——它告诉 agent：这些消息是谁发的、`trigger` / `approved` 各是什么意思、哪些内容要当不可信数据处理、回答会返回给谁。用户可以随便改，改过之后插件不会覆盖（只在文件不存在时写入）。
