@@ -156,9 +156,14 @@
     background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
   }
   .chat .body { white-space: pre-wrap; min-height: 22px; }
-  .chat .preview { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-  .chat .preview img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
-  .chat .preview button { font-size: 12px; padding: 2px 8px; }
+  .chat .preview { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .chat .thumb { position: relative; }
+  .chat .thumb img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  .chat .thumb button {
+    position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0;
+    font-size: 11px; line-height: 18px; border-radius: 999px; cursor: pointer;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  }
   pre.raw {
     display: none; margin-top: 12px; padding: 10px; overflow: auto; max-height: 220px;
     font-size: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
@@ -203,7 +208,7 @@
     <div class="row">
       <input id="chatInput" placeholder="问点什么…回车或点发送">
       <button id="chatPick">图片</button>
-      <input id="chatFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <input id="chatFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
       <button class="primary" id="chatBtn">发送</button>
     </div>
     <div class="preview" id="chatPreview"></div>
@@ -751,61 +756,80 @@ const chatOut = document.getElementById('chatOut');
 const chatFile = document.getElementById('chatFile');
 const chatPreview = document.getElementById('chatPreview');
 
-// 只带一张图：示例要短，多图的逻辑是一样的数组。
-let chatImage = null;
+// 最多 4 张，和 Host 的限制一致；本地先拦，别让用户白等一个注定失败的请求。
+let chatImages = [];
+const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
-function renderPreview() {
+function renderPreviews() {
   chatPreview.innerHTML = '';
-  if (chatImage === null) return;
-  const img = document.createElement('img');
-  img.src = `data:${chatImage.mediaType};base64,${chatImage.data}`;
-  img.alt = '待发送的图片';
-  const remove = document.createElement('button');
-  remove.textContent = '移除';
-  remove.onclick = () => {
-    chatImage = null;
-    chatFile.value = '';
-    renderPreview();
-  };
-  chatPreview.append(img, remove);
+  chatImages.forEach((image, index) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = `data:${image.mediaType};base64,${image.data}`;
+    img.alt = image.name || '待发送的图片';
+    const remove = document.createElement('button');
+    remove.textContent = '✕';
+    remove.title = '移除这张';
+    remove.onclick = () => {
+      chatImages.splice(index, 1);
+      renderPreviews();
+    };
+    thumb.append(img, remove);
+    chatPreview.append(thumb);
+  });
+}
+
+function readImage(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      const comma = result.indexOf(',');
+      resolve({
+        mediaType: file.type,
+        data: comma >= 0 ? result.slice(comma + 1) : result,
+        name: file.name,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 document.getElementById('chatPick').onclick = () => chatFile.click();
 
-chatFile.onchange = () => {
-  const file = chatFile.files && chatFile.files[0];
-  if (!file) return;
-  document.getElementById('chatError').textContent = '';
-  // 先在本地拦一道，别让用户白等一个注定失败的请求
-  if (!IMAGE_TYPES.includes(file.type)) {
-    document.getElementById('chatError').textContent = `不支持的图片类型：${file.type || '未知'}`;
-    chatFile.value = '';
-    return;
+chatFile.onchange = async () => {
+  const files = Array.from(chatFile.files || []);
+  chatFile.value = '';
+  if (files.length === 0) return;
+
+  const errorBox = document.getElementById('chatError');
+  errorBox.textContent = '';
+
+  for (const file of files) {
+    if (chatImages.length >= MAX_IMAGES) {
+      errorBox.textContent = `最多 ${MAX_IMAGES} 张图片`;
+      break;
+    }
+    if (!IMAGE_TYPES.includes(file.type)) {
+      errorBox.textContent = `${file.name}：不支持的格式 ${file.type || '未知'}`;
+      continue;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      errorBox.textContent = `${file.name}：超过 8MB`;
+      continue;
+    }
+    chatImages.push(await readImage(file));
+    renderPreviews();
   }
-  if (file.size > MAX_IMAGE_BYTES) {
-    document.getElementById('chatError').textContent = `图片太大（${Math.round(file.size / 1024 / 1024)}MB），上限 8MB`;
-    chatFile.value = '';
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const result = String(reader.result);
-    const comma = result.indexOf(',');
-    chatImage = {
-      mediaType: file.type,
-      data: comma >= 0 ? result.slice(comma + 1) : result,
-    };
-    renderPreview();
-  };
-  reader.readAsDataURL(file);
 };
 
 async function sendChat() {
   const text = chatInput.value.trim();
   if (text === '' || chatBtn.disabled) return;
-  const images = chatImage === null ? [] : [chatImage];
+  const images = chatImages.slice();
   chatBtn.disabled = true;
   chatOut.textContent = '';
   document.getElementById('chatError').textContent = '';
@@ -823,9 +847,9 @@ async function sendChat() {
   } finally {
     chatBtn.disabled = false;
     // 图片已经随请求发出去了，不管成败都清掉，免得下一轮重复带
-    chatImage = null;
+    chatImages = [];
     chatFile.value = '';
-    renderPreview();
+    renderPreviews();
   }
 }
 
